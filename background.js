@@ -10,7 +10,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const {
       problemNum, problemTitle, problemUrl,
-      tierImgUrl, tierColor, language,
+      tierImgUrl, tierColor, tierName, language,
       handle, userId, userRank, userTier,
       pid, sid, solvedUsr, solvedSub, totalSub,
     } = message;
@@ -47,6 +47,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (sid && pid) {
       embed.description = `[코드 보기](https://jungol.co.kr/problem/${pid}/submission?sid=${sid})`;
+    }
+    if (tierName) {
+      embed.fields.push({ name: "난이도", value: tierName, inline: true });
     }
     if (language) {
       embed.fields.push({ name: "언어", value: language, inline: true });

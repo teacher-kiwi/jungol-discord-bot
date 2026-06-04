@@ -1,6 +1,15 @@
 (() => {
   const COOLDOWN_MS = 5000;
-  const DATA_JSON_FILES = ["_data.json", "__data.json"];
+  const DATA_JSON_FILES = ["__data.json", "_data.json"];
+  const TIER_NAMES = [
+    "",
+    "Bronze V", "Bronze IV", "Bronze III", "Bronze II", "Bronze I",
+    "Silver V", "Silver IV", "Silver III", "Silver II", "Silver I",
+    "Gold V", "Gold IV", "Gold III", "Gold II", "Gold I",
+    "Platinum V", "Platinum IV", "Platinum III", "Platinum II", "Platinum I",
+    "Diamond V", "Diamond IV", "Diamond III", "Diamond II", "Diamond I",
+    "Ruby V", "Ruby IV", "Ruby III", "Ruby II", "Ruby I",
+  ];
   let lastSentTime = 0;
 
   function isContestPage() {
@@ -200,7 +209,17 @@
   }
 
   function getTierFromProblemData(problemData) {
-    return toNumber(problemData?.tier ?? problemData?.level ?? problemData?.difficulty);
+    const tier = problemData?.tier;
+
+    if (tier && typeof tier === "object") {
+      return toNumber(tier.tier ?? tier.id ?? tier.value ?? problemData?.fTier);
+    }
+
+    return toNumber(problemData?.fTier ?? tier ?? problemData?.level ?? problemData?.difficulty);
+  }
+
+  function getTierName(tier) {
+    return TIER_NAMES[tier] || (tier > 0 ? `Tier ${tier}` : "");
   }
 
   function getTierImageUrl(tier) {
@@ -239,7 +258,7 @@
   function buildMessage(problemId, problemUrl, documentTitle, language, dataJson) {
     let handle = "", userId = "", userRank = 0, userTier = 0;
     let pid = problemId, sid = "", solvedUsr = 0, solvedSub = 0, totalSub = 0;
-    let dataTitle = "", tierImgUrl = "", tierColor = "";
+    let dataTitle = "", tierImgUrl = "", tierColor = "", tierName = "";
 
     try {
       const decodedNodes = dataJson ? decodeNodes(dataJson) : [];
@@ -265,6 +284,7 @@
         totalSub = toNumber(rank.totalSub ?? problemData.totalSub);
         tierImgUrl = problemData.tierImgUrl || problemData.tierImageUrl || getTierImageUrl(tier);
         tierColor = getTierColor(problemData);
+        tierName = problemData.tierName || problemData.difficultyName || getTierName(tier);
       }
     } catch (e) {
       console.error("[정올 알리미] data.json 파싱 에러:", e);
@@ -281,6 +301,7 @@
       problemUrl,
       tierImgUrl: tierImgUrl || fallback.tierImgUrl,
       tierColor: tierColor || fallback.tierColor,
+      tierName,
       language,
       handle, userId, userRank, userTier,
       pid, sid, solvedUsr, solvedSub, totalSub,
