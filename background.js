@@ -10,7 +10,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const {
       problemNum, problemTitle, problemUrl,
-      tierImgUrl, tierColor, tierName, language,
+      tierImgUrl, tierColor, language,
+      executionTime, memoryUsage, memoryUnit, codeLength,
       handle, userId, userRank, userTier,
       pid, sid, solvedUsr, solvedSub, totalSub,
     } = message;
@@ -22,6 +23,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const userTierIconUrl = userTier
       ? `https://wsrv.nl/?url=${encodeURIComponent(`https://s.jungol.co.kr/solved/${userTier}.svg?dm=jungol.co.kr`)}&output=png`
       : "";
+    const embedTitle = [problemNum, problemTitle].filter(Boolean).join(" ") || "정올 정답 알림";
+
+    function toFiniteNumber(value) {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    }
+
+    function formatMetricNumber(value, maximumFractionDigits = 1) {
+      const num = toFiniteNumber(value);
+      if (num === null) return String(value);
+
+      return num.toLocaleString(undefined, { maximumFractionDigits });
+    }
+
+    function formatExecutionTime(value) {
+      return `${formatMetricNumber(value)} ms`;
+    }
+
+    function formatMemory(value, unit = "KB") {
+      const num = toFiniteNumber(value);
+      if (num === null) return String(value);
+
+      if (unit === "KB" && num >= 1024) {
+        return `${formatMetricNumber(num / 1024)} MB`;
+      }
+
+      return `${formatMetricNumber(num)} ${unit}`;
+    }
+
+    function formatCodeLength(value) {
+      const num = toFiniteNumber(value);
+      if (num === null) return String(value);
+
+      if (num >= 1024) {
+        return `${formatMetricNumber(num / 1024)} KB`;
+      }
+
+      return `${formatMetricNumber(num, 0)} B`;
+    }
 
     const embed = {
       author: {
@@ -31,7 +71,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         url: userId ? `https://jungol.co.kr/account/${userId}` : undefined,
         icon_url: userTierIconUrl || undefined,
       },
-      title: `${problemNum} ${problemTitle}`,
+      title: embedTitle,
       url: problemUrl,
       color: colorValue,
       fields: [],
@@ -48,11 +88,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (sid && pid) {
       embed.description = `[코드 보기](https://jungol.co.kr/problem/${pid}/submission?sid=${sid})`;
     }
-    if (tierName) {
-      embed.fields.push({ name: "난이도", value: tierName, inline: true });
-    }
     if (language) {
       embed.fields.push({ name: "언어", value: language, inline: true });
+    }
+    if (executionTime) {
+      embed.fields.push({ name: "실행 시간", value: formatExecutionTime(executionTime), inline: true });
+    }
+    if (memoryUsage) {
+      embed.fields.push({ name: "메모리", value: formatMemory(memoryUsage, memoryUnit), inline: true });
+    }
+    if (codeLength) {
+      embed.fields.push({ name: "코드 길이", value: formatCodeLength(codeLength), inline: true });
     }
     if (solvedUsr) {
       embed.fields.push({ name: "맞춘 사람", value: `${solvedUsr.toLocaleString()}명`, inline: true });

@@ -1,19 +1,25 @@
 (() => {
   const COOLDOWN_MS = 5000;
-  const DATA_JSON_FILES = ["__data.json", "_data.json"];
-  const TIER_NAMES = [
-    "",
-    "Bronze V", "Bronze IV", "Bronze III", "Bronze II", "Bronze I",
-    "Silver V", "Silver IV", "Silver III", "Silver II", "Silver I",
-    "Gold V", "Gold IV", "Gold III", "Gold II", "Gold I",
-    "Platinum V", "Platinum IV", "Platinum III", "Platinum II", "Platinum I",
-    "Diamond V", "Diamond IV", "Diamond III", "Diamond II", "Diamond I",
-    "Ruby V", "Ruby IV", "Ruby III", "Ruby II", "Ruby I",
-  ];
+  const TIER_IMAGE_BASE_URL = "https://s.jungol.co.kr/solved";
   let lastSentTime = 0;
 
   function isContestPage() {
     return window.location.pathname.includes("/contest/");
+  }
+
+  function getProblemIdFromPath() {
+    const match = window.location.pathname.match(/\/problem\/([^/]+)/);
+    return match ? match[1] : "";
+  }
+
+  function getProblemUrl(pid) {
+    return pid
+      ? `${window.location.origin}/problem/${pid}`
+      : window.location.origin + window.location.pathname;
+  }
+
+  function buildTierImageUrl(tier) {
+    return tier ? `${TIER_IMAGE_BASE_URL}/${tier}.svg?dm=jungol.co.kr` : "";
   }
 
   function decodeDevalue(data) {
@@ -23,12 +29,10 @@
 
     function resolve(idx) {
       if (typeof idx !== 'number') return idx;
-      if (idx < 0 || idx >= data.length) return idx;
-      if (seen.has(idx)) return seen.get(idx);
-
       const val = data[idx];
       if (val === null || val === undefined) return val;
       if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return val;
+      if (seen.has(idx)) return seen.get(idx);
       if (Array.isArray(val)) {
         const result = [];
         seen.set(idx, result);
@@ -48,282 +52,274 @@
     return resolve(0);
   }
 
-  function getProblemIdFromPath() {
-    const match = window.location.pathname.match(/\/problem\/([^/]+)/);
-    return match ? decodeURIComponent(match[1]) : "";
-  }
+  function getDomProblemTitle() {
+    const h1 = document.querySelector("h1");
+    if (!h1) return "";
 
-  function getProblemUrl() {
-    const match = window.location.pathname.match(/^(.*?\/problem\/[^/]+)/);
-    return match
-      ? window.location.origin + match[1]
-      : window.location.origin + window.location.pathname;
-  }
-
-  function getTitleFromDocument() {
-    return document.title.replace(/\s*-\s*JUNGOL\s*$/i, "").trim();
-  }
-
-  function getDomFallbackInfo() {
-    const problemNumElem = document.querySelector('h3.S-xp96hh > span');
-    const titleElem = document.querySelector('h1.S-xp96hh > span:not(.limit)');
-    const tierImgElem = document.querySelector('h1.S-xp96hh img');
-    const tierColorDiv = document.querySelector('h1.S-xp96hh main div');
-
-    return {
-      problemNum: problemNumElem?.childNodes?.[0]?.nodeValue?.trim() || "",
-      problemTitle: titleElem?.innerText?.trim() || "",
-      tierImgUrl: tierImgElem?.src || "",
-      tierColor: tierColorDiv?.style?.getPropertyValue('--t')?.trim() || "",
-    };
-  }
-
-  function getLanguageFromDom() {
-    const langBtn = Array.from(document.querySelectorAll('button')).find(btn => {
-      const icon = btn.querySelector('span.notranslate');
-      return icon && icon.innerText === 'language';
+    const titleSpan = Array.from(h1.children).find((child) => {
+      return child.tagName === "SPAN" && !child.classList.contains("limit");
     });
 
-    return langBtn ? langBtn.innerText.replace('language', '').trim() : "";
+    return titleSpan ? titleSpan.innerText.trim() : "";
   }
 
-  function hasOwn(value, key) {
-    return Object.prototype.hasOwnProperty.call(value, key);
+  function getDomTierImageUrl(tier) {
+    const tierSelector = tier ? `h1 img[src*="/solved/${tier}.svg"]` : "";
+    const tierImgElem = tierSelector
+      ? document.querySelector(tierSelector)
+      : document.querySelector('h1 img[src*="/solved/"]');
+
+    return tierImgElem ? tierImgElem.src : "";
   }
 
-  function unwrapData(value) {
-    if (value && typeof value === "object" && value.data && typeof value.data === "object") {
-      return value.data;
+  function getDomTierColor(tier) {
+    const tierSelector = tier ? `h1 img[src*="/solved/${tier}.svg"]` : 'h1 img[src*="/solved/"]';
+    const tierImgElem = document.querySelector(tierSelector);
+    const tierElem = tierImgElem?.closest('[style*="--t"]') || document.querySelector('h1 [style*="--t"]');
+
+    return tierElem ? tierElem.style.getPropertyValue("--t").trim() : "";
+  }
+
+  function getTierFromImageUrl(url) {
+    const match = url.match(/\/solved\/(\d+)\.svg/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function readJungolData(json) {
+    const result = {};
+
+    function hasOwn(value, key) {
+      return Object.prototype.hasOwnProperty.call(value, key);
     }
 
-    return value;
-  }
-
-  function findInObject(value, predicate, seen = new WeakSet()) {
-    if (!value || typeof value !== "object") return null;
-    if (seen.has(value)) return null;
-
-    seen.add(value);
-
-    const matched = predicate(value);
-    if (matched) return matched;
-
-    for (const child of Object.values(value)) {
-      const found = findInObject(child, predicate, seen);
-      if (found) return found;
+    function isPresent(value) {
+      return value !== undefined && value !== null && value !== "";
     }
 
-    return null;
-  }
-
-  function decodeNodes(json) {
-    const nodes = Array.isArray(json?.nodes) ? json.nodes : [];
-
-    return nodes
-      .map(node => node?.data ? decodeDevalue(node.data) : null)
-      .filter(node => node && typeof node === "object");
-  }
-
-  function findByKey(decodedNodes, key) {
-    for (const decodedNode of decodedNodes) {
-      const found = findInObject(decodedNode, value => {
-        if (!hasOwn(value, key)) return null;
-        return unwrapData(value[key]);
-      });
-
-      if (found) return found;
+    function unwrapData(value) {
+      return value && typeof value === "object" && value.data && typeof value.data === "object"
+        ? value.data
+        : value;
     }
 
-    return null;
-  }
+    function walkObjects(value, visit, seen = new WeakSet()) {
+      if (!value || typeof value !== "object" || seen.has(value)) return;
 
-  function isSameId(left, right) {
-    return left !== null
-      && left !== undefined
-      && right !== null
-      && right !== undefined
-      && String(left) === String(right);
-  }
+      seen.add(value);
+      visit(value);
 
-  function findProblemData(decodedNodes, problemId) {
-    if (!problemId) return null;
-
-    const keyedProblem = findByKey(decodedNodes, `$/problem/${problemId}`);
-    if (keyedProblem) return keyedProblem;
-
-    for (const decodedNode of decodedNodes) {
-      const found = findInObject(decodedNode, value => {
-        const candidate = unwrapData(value);
-        if (!candidate || typeof candidate !== "object") return null;
-        return isSameId(candidate.pid, problemId) ? candidate : null;
-      });
-
-      if (found) return found;
-    }
-
-    return null;
-  }
-
-  function findAccountData(decodedNodes) {
-    const account = findByKey(decodedNodes, "$/account/my");
-    if (account) return account;
-
-    for (const decodedNode of decodedNodes) {
-      const found = findInObject(decodedNode, value => {
-        const candidate = unwrapData(value);
-        if (!candidate || typeof candidate !== "object") return null;
-        return candidate.handle && hasOwn(candidate, "rank") && hasOwn(candidate, "tier")
-          ? candidate
-          : null;
-      });
-
-      if (found) return found;
-    }
-
-    return null;
-  }
-
-  function findSubmissionId(decodedNodes, problemId) {
-    for (const decodedNode of decodedNodes) {
-      const found = findInObject(decodedNode, value => {
-        const candidate = unwrapData(value);
-        if (!candidate || typeof candidate !== "object") return null;
-        if (candidate.pid !== undefined && !isSameId(candidate.pid, problemId)) return null;
-
-        return candidate.sid
-          || candidate.submissionId
-          || candidate.submission?.sid
-          || candidate.latestSubmission?.sid
-          || null;
-      });
-
-      if (found) return String(found);
-    }
-
-    return "";
-  }
-
-  function toNumber(value) {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : 0;
-  }
-
-  function getTierFromProblemData(problemData) {
-    const tier = problemData?.tier;
-
-    if (tier && typeof tier === "object") {
-      return toNumber(tier.tier ?? tier.id ?? tier.value ?? problemData?.fTier);
-    }
-
-    return toNumber(problemData?.fTier ?? tier ?? problemData?.level ?? problemData?.difficulty);
-  }
-
-  function getTierName(tier) {
-    return TIER_NAMES[tier] || (tier > 0 ? `Tier ${tier}` : "");
-  }
-
-  function getTierImageUrl(tier) {
-    return tier > 0
-      ? `https://s.jungol.co.kr/solved/${tier}.svg?dm=jungol.co.kr`
-      : "";
-  }
-
-  function getTierColor(problemData) {
-    const color = problemData?.tierColor
-      || problemData?.color
-      || problemData?.hexColor
-      || "";
-
-    return typeof color === "string" && color.startsWith("#") ? color : "";
-  }
-
-  async function fetchSubmissionData(problemUrl) {
-    let lastError = null;
-
-    for (const fileName of DATA_JSON_FILES) {
-      const dataUrl = `${problemUrl}/submission/${fileName}`;
-
-      try {
-        const res = await fetch(dataUrl, { credentials: "include" });
-        if (!res.ok) throw new Error(`${dataUrl} returned ${res.status}`);
-        return await res.json();
-      } catch (err) {
-        lastError = err;
+      for (const child of Object.values(value)) {
+        walkObjects(child, visit, seen);
       }
     }
 
-    throw lastError || new Error("data.json request failed");
-  }
+    function firstPresent(value, keys) {
+      for (const key of keys) {
+        if (hasOwn(value, key) && isPresent(value[key])) return value[key];
+      }
 
-  function buildMessage(problemId, problemUrl, documentTitle, language, dataJson) {
-    let handle = "", userId = "", userRank = 0, userTier = 0;
-    let pid = problemId, sid = "", solvedUsr = 0, solvedSub = 0, totalSub = 0;
-    let dataTitle = "", tierImgUrl = "", tierColor = "", tierName = "";
+      return undefined;
+    }
 
-    try {
-      const decodedNodes = dataJson ? decodeNodes(dataJson) : [];
-      const account = findAccountData(decodedNodes);
-      const problemData = findProblemData(decodedNodes, problemId);
+    function metricValue(value) {
+      if (Array.isArray(value)) {
+        const numbers = value.map(item => Number(item)).filter(Number.isFinite);
+        return numbers.length ? Math.max(...numbers) : undefined;
+      }
 
+      if (value && typeof value === "object") return undefined;
+      if (!isPresent(value)) return undefined;
+
+      const num = Number(value);
+      return Number.isFinite(num) ? num : value;
+    }
+
+    function readMetric(value, keys) {
+      for (const key of keys) {
+        if (!hasOwn(value, key)) continue;
+
+        const metric = metricValue(value[key]);
+        if (isPresent(metric)) return { key, value: metric };
+      }
+
+      return null;
+    }
+
+    function sourceText(source) {
+      if (typeof source === "string") return source;
+      if (Array.isArray(source)) {
+        for (const item of source) {
+          const text = sourceText(item);
+          if (text) return text;
+        }
+      }
+      if (source && typeof source === "object") {
+        return sourceText(source.source || source.code || source.text);
+      }
+
+      return "";
+    }
+
+    function sourceByteLength(value) {
+      const text = sourceText(value.source || value.code || value.text);
+      return text ? new TextEncoder().encode(text).length : 0;
+    }
+
+    function hasSubmissionSignal(value) {
+      return [
+        "sid", "submissionId", "r", "result", "m_reason", "score",
+        "m_time", "m_memory", "source",
+      ].some(key => hasOwn(value, key));
+    }
+
+    function readSubmissionData(value) {
+      const candidate = unwrapData(value);
+      if (!candidate || typeof candidate !== "object" || !hasSubmissionSignal(candidate)) return;
+
+      const executionTime = readMetric(candidate, [
+        "m_time", "dur", "duration", "runtime", "runtimeMs", "timeMs", "time",
+      ]);
+      const memoryUsage = readMetric(candidate, [
+        "m_memory", "mem", "memory", "memoryKb", "memoryKB", "memoryMb", "memoryMB", "memoryUsage",
+      ]);
+      const codeLength = readMetric(candidate, [
+        "size", "byt", "byte", "bytes", "sourceLength", "codeLength", "codeLengthBytes",
+      ]);
+      const sourceLength = codeLength ? 0 : sourceByteLength(candidate);
+
+      const sid = firstPresent(candidate, ["sid", "submissionId"])
+        || (
+          (executionTime || memoryUsage || codeLength || candidate.source)
+            ? firstPresent(candidate, ["id"])
+            : undefined
+        );
+      const language = firstPresent(candidate, ["language", "lang"]);
+
+      if (sid) result.sid = String(sid);
+      if (language) result.language = language;
+      if (executionTime) result.executionTime = executionTime.value;
+      if (memoryUsage) {
+        result.memoryUsage = memoryUsage.value;
+        result.memoryUnit = memoryUsage.key === "memory" || memoryUsage.key.toLowerCase().includes("mb")
+          ? "MB"
+          : "KB";
+      }
+      if (codeLength || sourceLength) {
+        result.codeLength = codeLength?.value || sourceLength;
+      }
+    }
+
+    for (const node of json?.nodes || []) {
+      if (!node?.data) continue;
+
+      const root = decodeDevalue(node.data);
+      if (!root || typeof root !== "object") continue;
+
+      const account = root["$/account/my"]?.data;
       if (account) {
-        handle = account.handle || "";
-        userId = account.id || "";
-        userRank = toNumber(account.rank);
-        userTier = toNumber(account.tier);
+        if (account.handle) result.handle = account.handle;
+        if (account.id) result.userId = account.id;
+        if (account.rank) result.userRank = account.rank;
+        if (account.tier) result.userTier = account.tier;
       }
 
-      if (problemData) {
-        const rank = problemData.rank || {};
-        const tier = getTierFromProblemData(problemData);
+      if (root.pid) result.pid = String(root.pid);
 
-        pid = problemData.pid || problemId;
-        sid = problemData.sid || findSubmissionId(decodedNodes, problemId);
-        dataTitle = problemData.title || problemData.name || "";
-        solvedUsr = toNumber(rank.solvedUsr ?? problemData.solvedUsr);
-        solvedSub = toNumber(rank.solvedSub ?? problemData.solvedSub);
-        totalSub = toNumber(rank.totalSub ?? problemData.totalSub);
-        tierImgUrl = problemData.tierImgUrl || problemData.tierImageUrl || getTierImageUrl(tier);
-        tierColor = getTierColor(problemData);
-        tierName = problemData.tierName || problemData.difficultyName || getTierName(tier);
-      }
-    } catch (e) {
-      console.error("[정올 알리미] data.json 파싱 에러:", e);
+      walkObjects(root, readSubmissionData);
+
+      const problemKey = Object.keys(root).find(k => k.startsWith("$/problem/"));
+      const problemData = problemKey ? root[problemKey]?.data : null;
+      if (!problemData) continue;
+
+      result.pid = String(problemData.id || root.pid || result.pid || "");
+      if (problemData.title) result.problemTitle = problemData.title;
+
+      const problemTier = problemData.fTier || problemData.tier?.tier;
+      if (problemTier) result.problemTier = problemTier;
+
+      if (problemData.sid) result.sid = String(problemData.sid);
+      if (problemData.rank?.solvedUsr) result.solvedUsr = problemData.rank.solvedUsr;
+      if (problemData.rank?.solvedSub) result.solvedSub = problemData.rank.solvedSub;
+      if (problemData.rank?.totalSub) result.totalSub = problemData.rank.totalSub;
     }
 
-    const fallback = (!pid || !documentTitle || !tierImgUrl || !tierColor)
-      ? getDomFallbackInfo()
-      : {};
-
-    return {
-      type: "CORRECT_ANSWER",
-      problemNum: pid || fallback.problemNum,
-      problemTitle: documentTitle || dataTitle || fallback.problemTitle,
-      problemUrl,
-      tierImgUrl: tierImgUrl || fallback.tierImgUrl,
-      tierColor: tierColor || fallback.tierColor,
-      tierName,
-      language,
-      handle, userId, userRank, userTier,
-      pid, sid, solvedUsr, solvedSub, totalSub,
-    };
+    return result;
   }
 
-  async function sendCorrectAnswerMessage() {
-    const problemId = getProblemIdFromPath();
-    const problemUrl = getProblemUrl();
-    const documentTitle = getTitleFromDocument();
-    const language = getLanguageFromDom();
-    let dataJson = null;
+  function mergeData(...sources) {
+    return sources.reduce((result, source) => {
+      for (const [key, value] of Object.entries(source || {})) {
+        if (value !== undefined && value !== null && value !== "") {
+          result[key] = value;
+        }
+      }
+      return result;
+    }, {});
+  }
 
-    try {
-      dataJson = await fetchSubmissionData(problemUrl);
-    } catch (err) {
-      console.error("[정올 알리미] data.json 요청 실패:", err);
+  function fetchJson(url) {
+    return fetch(url).then(res => {
+      if (!res.ok) throw new Error(`${url} returned ${res.status}`);
+      return res.json();
+    });
+  }
+
+  function fetchText(url) {
+    return fetch(url, { credentials: "include" }).then(res => {
+      if (!res.ok) throw new Error(`${url} returned ${res.status}`);
+      return res.text();
+    });
+  }
+
+  function readSubmissionHtml(html, sid) {
+    const result = {};
+    const escapedSid = sid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const submissionBlockMatch = html.match(new RegExp(`"\\$/submission/${escapedSid}"[\\s\\S]*?url:"/submission/${escapedSid}"`));
+    const source = submissionBlockMatch ? submissionBlockMatch[0] : html;
+
+    function readNumber(key) {
+      const match = source.match(new RegExp(`${key}:([0-9]+(?:\\.[0-9]+)?)`));
+      return match ? Number(match[1]) : "";
     }
 
-    chrome.runtime.sendMessage(
-      buildMessage(problemId, problemUrl, documentTitle, language, dataJson)
-    );
+    function readString(key) {
+      const match = source.match(new RegExp(`${key}:"([^"]*)"`));
+      return match ? match[1] : "";
+    }
+
+    result.sid = sid;
+    result.executionTime = readNumber("m_time");
+    result.memoryUsage = readNumber("m_memory");
+    result.memoryUnit = "KB";
+    result.codeLength = readNumber("size");
+    result.language = readString("language");
+    result.pid = String(readNumber("problemId") || "");
+
+    return result;
+  }
+
+  function isExtensionContextError(err) {
+    const message = String(err?.message || err);
+
+    return message.includes("Extension context invalidated")
+      || message.includes("Could not establish connection")
+      || message.includes("Receiving end does not exist");
+  }
+
+  function safeSendMessage(message) {
+    try {
+      if (!chrome?.runtime?.id) return false;
+
+      chrome.runtime.sendMessage(message);
+
+      return true;
+    } catch (err) {
+      if (!isExtensionContextError(err)) {
+        console.error("[정올 알리미] background 메시지 전송 실패:", err);
+      }
+
+      return false;
+    }
   }
 
   const observer = new MutationObserver((mutations) => {
@@ -338,9 +334,95 @@
         if (!node.innerText || !node.innerText.includes("정답이에요!")) continue;
 
         lastSentTime = now;
-        sendCorrectAnswerMessage().catch(err => {
-          console.error("[정올 알리미] 알림 전송 준비 실패:", err);
+
+        const pathPid = getProblemIdFromPath();
+        const problemUrl = getProblemUrl(pathPid);
+        const domProblemTitle = getDomProblemTitle();
+        const domTierImgUrl = getDomTierImageUrl();
+        const domProblemTier = getTierFromImageUrl(domTierImgUrl);
+        const langBtn = Array.from(document.querySelectorAll('button')).find(btn => {
+          const icon = btn.querySelector('span.notranslate');
+          return icon && icon.innerText === 'language';
         });
+        const language = langBtn ? langBtn.innerText.replace('language', '').trim() : "";
+
+        Promise.allSettled([
+          fetchJson(`${problemUrl}/__data.json`),
+          fetchJson(`${problemUrl}/submission/__data.json`),
+        ])
+          .then(async results => {
+            const [problemResult, submissionResult] = results;
+
+            for (const result of results) {
+              if (result.status === "rejected") {
+                console.error("[정올 알리미] __data.json 요청 실패:", result.reason);
+              }
+            }
+
+            let data = mergeData(
+              problemResult.status === "fulfilled" ? readJungolData(problemResult.value) : {},
+              submissionResult.status === "fulfilled" ? readJungolData(submissionResult.value) : {}
+            );
+
+            if (data.sid) {
+              const sid = encodeURIComponent(data.sid);
+              const detailResults = await Promise.allSettled([
+                fetchJson(`${problemUrl}/submission/__data.json?sid=${sid}`).then(readJungolData),
+                fetchJson(`${window.location.origin}/submission/${sid}/__data.json`).then(readJungolData),
+                fetchText(`${window.location.origin}/submission/${sid}`).then(html => readSubmissionHtml(html, data.sid)),
+              ]);
+
+              data = mergeData(
+                data,
+                ...detailResults.map(result => (
+                  result.status === "fulfilled" ? result.value : {}
+                ))
+              );
+            }
+
+            const pid = data.pid || pathPid;
+            const problemTier = data.problemTier || domProblemTier;
+            const tierImgUrl = domTierImgUrl || buildTierImageUrl(problemTier);
+            const tierColor = getDomTierColor(problemTier);
+
+            safeSendMessage({
+              type: "CORRECT_ANSWER",
+              problemNum: pid ? `#${pid}` : "",
+              problemTitle: data.problemTitle || domProblemTitle,
+              problemUrl,
+              tierImgUrl,
+              tierColor,
+              language,
+              executionTime: data.executionTime || "",
+              memoryUsage: data.memoryUsage || "",
+              memoryUnit: data.memoryUnit || "KB",
+              codeLength: data.codeLength || "",
+              handle: data.handle || "",
+              userId: data.userId || "",
+              userRank: data.userRank || 0,
+              userTier: data.userTier || 0,
+              pid,
+              sid: data.sid || "",
+              solvedUsr: data.solvedUsr || 0,
+              solvedSub: data.solvedSub || 0,
+              totalSub: data.totalSub || 0,
+            });
+          })
+          .catch(err => {
+            console.error("[정올 알리미] __data.json 처리 실패:", err);
+            safeSendMessage({
+              type: "CORRECT_ANSWER",
+              problemNum: pathPid ? `#${pathPid}` : "",
+              problemTitle: domProblemTitle,
+              problemUrl,
+              tierImgUrl: domTierImgUrl,
+              tierColor: getDomTierColor(domProblemTier),
+              language,
+              executionTime: "", memoryUsage: "", memoryUnit: "KB", codeLength: "",
+              handle: "", userId: "", userRank: 0, userTier: 0,
+              pid: pathPid, sid: "", solvedUsr: 0, solvedSub: 0, totalSub: 0,
+            });
+          });
 
         return;
       }
