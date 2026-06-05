@@ -63,18 +63,19 @@
     return titleSpan ? titleSpan.innerText.trim() : "";
   }
 
-  function getDomTierImageUrl(tier) {
-    const tierSelector = tier ? `h1 img[src*="/solved/${tier}.svg"]` : "";
-    const tierImgElem = tierSelector
-      ? document.querySelector(tierSelector)
-      : document.querySelector('h1 img[src*="/solved/"]');
+  function tierImageSelector(tier) {
+    return tier
+      ? `h1 img[src*="/solved/${tier}.svg"]`
+      : 'h1 img[src*="/solved/"]';
+  }
 
+  function getDomTierImageUrl(tier) {
+    const tierImgElem = document.querySelector(tierImageSelector(tier));
     return tierImgElem ? tierImgElem.src : "";
   }
 
   function getDomTierColor(tier) {
-    const tierSelector = tier ? `h1 img[src*="/solved/${tier}.svg"]` : 'h1 img[src*="/solved/"]';
-    const tierImgElem = document.querySelector(tierSelector);
+    const tierImgElem = document.querySelector(tierImageSelector(tier));
     const tierElem = tierImgElem?.closest('[style*="--t"]') || document.querySelector('h1 [style*="--t"]');
 
     return tierElem ? tierElem.style.getPropertyValue("--t").trim() : "";
@@ -83,6 +84,15 @@
   function getTierFromImageUrl(url) {
     const match = url.match(/\/solved\/(\d+)\.svg/);
     return match ? Number(match[1]) : 0;
+  }
+
+  function getDomLanguage() {
+    const langBtn = Array.from(document.querySelectorAll('button')).find(btn => {
+      const icon = btn.querySelector('span.notranslate');
+      return icon && icon.innerText === 'language';
+    });
+
+    return langBtn ? langBtn.innerText.replace('language', '').trim() : "";
   }
 
   function readJungolData(json) {
@@ -322,6 +332,96 @@
     }
   }
 
+  function readDomData() {
+    const pathPid = getProblemIdFromPath();
+    const tierImgUrl = getDomTierImageUrl();
+
+    return {
+      pid: pathPid,
+      problemUrl: getProblemUrl(pathPid),
+      problemTitle: getDomProblemTitle(),
+      tierImgUrl,
+      problemTier: getTierFromImageUrl(tierImgUrl),
+      language: getDomLanguage(),
+    };
+  }
+
+  function fetchSubmissionDetail(rawSid, problemUrl) {
+    const sid = encodeURIComponent(rawSid);
+    const { origin } = window.location;
+
+    return Promise.allSettled([
+      fetchJson(`${problemUrl}/submission/__data.json?sid=${sid}`).then(readJungolData),
+      fetchJson(`${origin}/submission/${sid}/__data.json`).then(readJungolData),
+      fetchText(`${origin}/submission/${sid}`).then(html => readSubmissionHtml(html, rawSid)),
+    ]).then(results => results.map(result => (
+      result.status === "fulfilled" ? result.value : {}
+    )));
+  }
+
+  async function fetchSubmissionData(problemUrl) {
+    const results = await Promise.allSettled([
+      fetchJson(`${problemUrl}/__data.json`),
+      fetchJson(`${problemUrl}/submission/__data.json`),
+    ]);
+
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.error("[정올 알리미] __data.json 요청 실패:", result.reason);
+      }
+    }
+
+    let data = mergeData(...results.map(result => (
+      result.status === "fulfilled" ? readJungolData(result.value) : {}
+    )));
+
+    if (data.sid) {
+      data = mergeData(data, ...await fetchSubmissionDetail(data.sid, problemUrl));
+    }
+
+    return data;
+  }
+
+  function buildPayload(data, dom) {
+    const pid = data.pid || dom.pid;
+    const problemTier = data.problemTier || dom.problemTier;
+
+    return {
+      type: "CORRECT_ANSWER",
+      problemNum: pid ? `#${pid}` : "",
+      problemTitle: data.problemTitle || dom.problemTitle,
+      problemUrl: dom.problemUrl,
+      tierImgUrl: dom.tierImgUrl || buildTierImageUrl(problemTier),
+      tierColor: getDomTierColor(problemTier),
+      language: dom.language || data.language || "",
+      executionTime: data.executionTime || "",
+      memoryUsage: data.memoryUsage || "",
+      memoryUnit: data.memoryUnit || "KB",
+      codeLength: data.codeLength || "",
+      handle: data.handle || "",
+      userId: data.userId || "",
+      userRank: data.userRank || 0,
+      userTier: data.userTier || 0,
+      pid,
+      sid: data.sid || "",
+      solvedUsr: data.solvedUsr || 0,
+      solvedSub: data.solvedSub || 0,
+      totalSub: data.totalSub || 0,
+    };
+  }
+
+  async function handleCorrectAnswer() {
+    const dom = readDomData();
+
+    try {
+      const data = await fetchSubmissionData(dom.problemUrl);
+      safeSendMessage(buildPayload(data, dom));
+    } catch (err) {
+      console.error("[정올 알리미] __data.json 처리 실패:", err);
+      safeSendMessage(buildPayload({}, dom));
+    }
+  }
+
   const observer = new MutationObserver((mutations) => {
     if (isContestPage()) return;
 
@@ -334,95 +434,7 @@
         if (!node.innerText || !node.innerText.includes("정답이에요!")) continue;
 
         lastSentTime = now;
-
-        const pathPid = getProblemIdFromPath();
-        const problemUrl = getProblemUrl(pathPid);
-        const domProblemTitle = getDomProblemTitle();
-        const domTierImgUrl = getDomTierImageUrl();
-        const domProblemTier = getTierFromImageUrl(domTierImgUrl);
-        const langBtn = Array.from(document.querySelectorAll('button')).find(btn => {
-          const icon = btn.querySelector('span.notranslate');
-          return icon && icon.innerText === 'language';
-        });
-        const language = langBtn ? langBtn.innerText.replace('language', '').trim() : "";
-
-        Promise.allSettled([
-          fetchJson(`${problemUrl}/__data.json`),
-          fetchJson(`${problemUrl}/submission/__data.json`),
-        ])
-          .then(async results => {
-            const [problemResult, submissionResult] = results;
-
-            for (const result of results) {
-              if (result.status === "rejected") {
-                console.error("[정올 알리미] __data.json 요청 실패:", result.reason);
-              }
-            }
-
-            let data = mergeData(
-              problemResult.status === "fulfilled" ? readJungolData(problemResult.value) : {},
-              submissionResult.status === "fulfilled" ? readJungolData(submissionResult.value) : {}
-            );
-
-            if (data.sid) {
-              const sid = encodeURIComponent(data.sid);
-              const detailResults = await Promise.allSettled([
-                fetchJson(`${problemUrl}/submission/__data.json?sid=${sid}`).then(readJungolData),
-                fetchJson(`${window.location.origin}/submission/${sid}/__data.json`).then(readJungolData),
-                fetchText(`${window.location.origin}/submission/${sid}`).then(html => readSubmissionHtml(html, data.sid)),
-              ]);
-
-              data = mergeData(
-                data,
-                ...detailResults.map(result => (
-                  result.status === "fulfilled" ? result.value : {}
-                ))
-              );
-            }
-
-            const pid = data.pid || pathPid;
-            const problemTier = data.problemTier || domProblemTier;
-            const tierImgUrl = domTierImgUrl || buildTierImageUrl(problemTier);
-            const tierColor = getDomTierColor(problemTier);
-
-            safeSendMessage({
-              type: "CORRECT_ANSWER",
-              problemNum: pid ? `#${pid}` : "",
-              problemTitle: data.problemTitle || domProblemTitle,
-              problemUrl,
-              tierImgUrl,
-              tierColor,
-              language,
-              executionTime: data.executionTime || "",
-              memoryUsage: data.memoryUsage || "",
-              memoryUnit: data.memoryUnit || "KB",
-              codeLength: data.codeLength || "",
-              handle: data.handle || "",
-              userId: data.userId || "",
-              userRank: data.userRank || 0,
-              userTier: data.userTier || 0,
-              pid,
-              sid: data.sid || "",
-              solvedUsr: data.solvedUsr || 0,
-              solvedSub: data.solvedSub || 0,
-              totalSub: data.totalSub || 0,
-            });
-          })
-          .catch(err => {
-            console.error("[정올 알리미] __data.json 처리 실패:", err);
-            safeSendMessage({
-              type: "CORRECT_ANSWER",
-              problemNum: pathPid ? `#${pathPid}` : "",
-              problemTitle: domProblemTitle,
-              problemUrl,
-              tierImgUrl: domTierImgUrl,
-              tierColor: getDomTierColor(domProblemTier),
-              language,
-              executionTime: "", memoryUsage: "", memoryUnit: "KB", codeLength: "",
-              handle: "", userId: "", userRank: 0, userTier: 0,
-              pid: pathPid, sid: "", solvedUsr: 0, solvedSub: 0, totalSub: 0,
-            });
-          });
+        handleCorrectAnswer();
 
         return;
       }
