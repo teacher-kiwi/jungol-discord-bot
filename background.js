@@ -44,14 +44,24 @@ async function handleCorrectAnswer(message) {
     return { status: "duplicate" };
   }
 
-  const payload = buildPayload(message, settings.displayName);
+  const { payload, files } = await buildPayload(message, settings.displayName);
 
   try {
-    const res = await fetch(settings.webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let options;
+    if (files.length) {
+      // 티어 이미지를 첨부파일로 함께 전송 (embed에서 attachment://파일명 으로 참조)
+      const form = new FormData();
+      form.append("payload_json", JSON.stringify(payload));
+      files.forEach((f, i) => form.append(`files[${i}]`, f.blob, f.name));
+      options = { method: "POST", body: form };
+    } else {
+      options = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      };
+    }
+    const res = await fetch(settings.webhookUrl, options);
 
     if (!res.ok) {
       console.error("Discord webhook failed:", res.status);
@@ -71,13 +81,30 @@ async function handleCorrectAnswer(message) {
   }
 }
 
-function buildPayload(message, displayName) {
+// data URL → Blob (실패 시 null)
+async function dataUrlToBlob(dataUrl) {
+  if (!dataUrl || !dataUrl.startsWith("data:image/png;base64,")) return null;
+  try {
+    return await (await fetch(dataUrl)).blob();
+  } catch {
+    return null;
+  }
+}
+
+async function buildPayload(message, displayName) {
   const {
     problemNum, problemTitle, problemUrl,
     tierImgUrl, tierColor, language,
     handle, userId, userRank, userTier,
     pid, sid, solvedUsr, solvedSub, totalSub,
+    tierPng, userTierPng,
   } = message;
+
+  const files = [];
+  const tierBlob = await dataUrlToBlob(tierPng);
+  const userTierBlob = await dataUrlToBlob(userTierPng);
+  if (tierBlob) files.push({ name: "tier.png", blob: tierBlob });
+  if (userTierBlob) files.push({ name: "user-tier.png", blob: userTierBlob });
 
   const colorValue = tierColor && tierColor.startsWith("#")
     ? parseInt(tierColor.replace("#", ""), 16)
@@ -98,7 +125,9 @@ function buildPayload(message, displayName) {
         ? `${baseName} (🏅${userRank.toLocaleString()}등)`
         : baseName,
       url: userId ? `https://jungol.co.kr/account/${userId}` : undefined,
-      icon_url: userTierIconUrl || undefined,
+      icon_url: userTierBlob
+        ? "attachment://user-tier.png"
+        : (userTierIconUrl || undefined),
     },
     title: `${problemNum} ${problemTitle}`,
     url: problemUrl,
@@ -110,7 +139,10 @@ function buildPayload(message, displayName) {
     },
   };
 
-  if (tierImgUrl) {
+  if (tierBlob) {
+    embed.thumbnail = { url: "attachment://tier.png" };
+  } else if (tierImgUrl) {
+    // 변환 실패 시 기존 방식(외부 변환 서비스) 사용
     const pngConvertedUrl = `https://wsrv.nl/?url=${encodeURIComponent(tierImgUrl)}&output=png`;
     embed.thumbnail = { url: pngConvertedUrl };
   }
@@ -129,8 +161,11 @@ function buildPayload(message, displayName) {
   }
 
   return {
-    username: "정올 알리미",
-    avatar_url: "https://s.jungol.co.kr/logo.png",
-    embeds: [embed],
+    payload: {
+      username: "정올 알리미",
+      avatar_url: "https://s.jungol.co.kr/logo.png",
+      embeds: [embed],
+    },
+    files,
   };
 }

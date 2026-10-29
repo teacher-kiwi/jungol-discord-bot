@@ -118,6 +118,38 @@
     });
   }
 
+  /**
+   * 정올 티어 SVG를 PNG(data URL)로 변환합니다.
+   * 디스코드는 SVG를 표시하지 못하므로, 외부 변환 서비스 대신 여기서 직접 변환해 첨부파일로 보냅니다.
+   * 실패하면 ""를 반환 (background에서 기존 wsrv.nl 방식으로 대체)
+   */
+  async function svgToPngDataUrl(url, size = 128) {
+    if (!url) return "";
+    let blobUrl = "";
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return "";
+      const svg = await res.text();
+      blobUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+      const img = new Image();
+      img.src = blobUrl;
+      await img.decode();
+      const w = img.naturalWidth || size;
+      const h = img.naturalHeight || size;
+      const scale = size / Math.max(w, h);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(w * scale);
+      canvas.height = Math.round(h * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png");
+    } catch (e) {
+      console.warn("[정올 알리미] 티어 이미지 변환 실패:", e);
+      return "";
+    } finally {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    }
+  }
+
   // 채점 결과 판정 라벨 (2026-10 정올 개편 이후: "정답이에요!" 문구 → 결과 오버레이의 .verdict-label "정답")
   const AC_LABELS = ["정답", "Accepted"];
   const text = (sel) => document.querySelector(sel)?.textContent.trim() || "";
@@ -161,7 +193,7 @@
 
     fetch(submissionUrl + "/__data.json")
       .then(res => res.json())
-      .then(json => {
+      .then(async json => {
         let handle = "", userId = "", userRank = 0, userTier = 0;
         let pid = "", sid = "", solvedUsr = 0, solvedSub = 0, totalSub = 0;
 
@@ -186,6 +218,11 @@
             if (probKey && prob[probKey]?.data) {
               const probData = prob[probKey].data;
               sid = probData.sid || "";
+              // 티어 이미지는 서버 티어 값으로 만듦 (티어 0 = 미분류 문제는 페이지에 아이콘이 없어 DOM에서 못 읽음)
+              const tierNum = probData.tier?.tier;
+              if (Number.isInteger(tierNum)) {
+                basePayload.tierImgUrl = `https://s.jungol.co.kr/solved/${tierNum}.svg?dm=jungol.co.kr`;
+              }
               solvedUsr = probData.rank?.solvedUsr || 0;
               solvedSub = probData.rank?.solvedSub || 0;
               totalSub = probData.rank?.totalSub || 0;
@@ -195,10 +232,19 @@
           console.error("[정올 알리미] __data.json 파싱 에러:", e);
         }
 
+        const userTierUrl = userTier
+          ? `https://s.jungol.co.kr/solved/${userTier}.svg?dm=jungol.co.kr`
+          : "";
+        const [tierPng, userTierPng] = await Promise.all([
+          svgToPngDataUrl(basePayload.tierImgUrl),
+          svgToPngDataUrl(userTierUrl),
+        ]);
+
         sendAndShow({
           ...basePayload,
           handle, userId, userRank, userTier,
           pid, sid, solvedUsr, solvedSub, totalSub,
+          tierPng, userTierPng,
         }, targetEl);
       })
       .catch(err => {
