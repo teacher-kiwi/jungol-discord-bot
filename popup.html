@@ -5,10 +5,11 @@
     <meta charset="UTF-8">
     <style>
         body {
-            width: 280px;
+            width: 320px;
             padding: 15px;
             font-family: 'Malgun Gothic', sans-serif;
             color: #333;
+            margin: 0;
         }
 
         h3 {
@@ -30,13 +31,19 @@
             color: #555;
         }
 
-        input {
+        input[type="text"] {
             width: 100%;
             padding: 8px;
             box-sizing: border-box;
             border: 1px solid #ccc;
             border-radius: 4px;
             font-size: 13px;
+        }
+
+        .warning {
+            margin: 5px 0 0;
+            font-size: 11px;
+            color: #e74c3c;
         }
 
         button {
@@ -54,6 +61,84 @@
         button:hover {
             background-color: #3a509a;
         }
+
+        .divider {
+            border-top: 1px solid #ddd;
+            margin: 14px 0;
+        }
+
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+        }
+
+        .toggle-row + .toggle-row {
+            border-top: 1px solid #eee;
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            color: #333;
+            flex: 1;
+            padding-right: 12px;
+        }
+
+        .toggle-desc {
+            display: block;
+            font-size: 11px;
+            color: #888;
+            font-weight: normal;
+            margin-top: 2px;
+        }
+
+        /* iOS 스타일 토글 스위치 */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 22px;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.2s;
+            border-radius: 22px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .switch input:checked + .slider {
+            background-color: #4a66c3;
+        }
+
+        .switch input:checked + .slider:before {
+            transform: translateX(18px);
+        }
     </style>
 </head>
 
@@ -63,8 +148,50 @@
     <div class="input-group">
         <label for="webhookUrl">디스코드 웹훅 URL</label>
         <input type="text" id="webhookUrl" placeholder="https://discord.com/api/webhooks/..." />
-        <p style="margin: 5px 0 0; font-size: 11px; color: #e74c3c;">웹훅 URL은 타인에게 공유하지 마세요.</p>
+        <p class="warning">웹훅 URL은 타인에게 공유하지 마세요.</p>
     </div>
+
+    <div class="input-group">
+        <label for="displayName">표시 이름 (선택)</label>
+        <input type="text" id="displayName" placeholder="비워두면 정올 핸들 사용" />
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="toggle-row">
+        <span class="toggle-label">
+            알림 활성화
+            <span class="toggle-desc">끄면 아무 알림도 전송하지 않음</span>
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="active" />
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="toggle-row">
+        <span class="toggle-label">
+            첫 정답만 전송
+            <span class="toggle-desc">같은 문제를 다시 맞춰도 알림이 오지 않음</span>
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="sendFirstAcOnly" />
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="toggle-row">
+        <span class="toggle-label">
+            결과 이모지 표시
+            <span class="toggle-desc">정답 페이지에 ✔️ / ❌ 표시</span>
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="showEmoji" />
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="divider"></div>
 
     <button id="saveBtn">저장하기</button>
 

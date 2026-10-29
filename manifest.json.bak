@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "정올 알리미",
+  "version": "1.0.0",
+  "description": "정올(Jungol)에서 정답 판정 시 디스코드 웹훅으로 알림을 보냅니다.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://discord.com/api/*",
+    "https://discordapp.com/api/webhooks/*",
+    "https://jungol.co.kr/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "정올 알리미 설정"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jungol.co.kr/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

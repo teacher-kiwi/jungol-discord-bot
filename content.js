@@ -1,47 +1,41 @@
 (() => {
   const COOLDOWN_MS = 5000;
-  const TIER_IMAGE_BASE_URL = "https://s.jungol.co.kr/solved";
   let lastSentTime = 0;
+
+  // popup에서 설정한 값을 캐시 (fetch 전 빠른 체크용)
+  // storage.onChanged로 실시간 갱신됨
+  const settings = {
+    active: true,
+    showEmoji: true,
+  };
+
+  chrome.storage.sync.get(
+    { active: true, showEmoji: true },
+    (data) => {
+      settings.active = Boolean(data.active);
+      settings.showEmoji = Boolean(data.showEmoji);
+    }
+  );
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync") return;
+    if (changes.active !== undefined) settings.active = Boolean(changes.active.newValue);
+    if (changes.showEmoji !== undefined) settings.showEmoji = Boolean(changes.showEmoji.newValue);
+  });
 
   function isContestPage() {
     return window.location.pathname.includes("/contest/");
   }
 
-  function getProblemIdFromPath() {
-    const match = window.location.pathname.match(/\/problem\/([^/]+)/);
-    return match ? match[1] : "";
-  }
-
-  function getProblemUrl(pid) {
-    return pid
-      ? `${window.location.origin}/problem/${pid}`
-      : window.location.origin + window.location.pathname;
-  }
-
-  function buildTierImageUrl(tier) {
-    return tier ? `${TIER_IMAGE_BASE_URL}/${tier}.svg?dm=jungol.co.kr` : "";
-  }
-
   function decodeDevalue(data) {
-    if (!Array.isArray(data)) return data;
-
-    const seen = new Map();
-
     function resolve(idx) {
       if (typeof idx !== 'number') return idx;
       const val = data[idx];
       if (val === null || val === undefined) return val;
       if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return val;
-      if (seen.has(idx)) return seen.get(idx);
-      if (Array.isArray(val)) {
-        const result = [];
-        seen.set(idx, result);
-        for (const item of val) result.push(resolve(item));
-        return result;
-      }
+      if (Array.isArray(val)) return val.map(item => resolve(item));
       if (typeof val === 'object') {
         const result = {};
-        seen.set(idx, result);
         for (const [key, ref] of Object.entries(val)) {
           result[key] = resolve(ref);
         }
@@ -52,393 +46,170 @@
     return resolve(0);
   }
 
-  function getDomProblemTitle() {
-    const h1 = document.querySelector("h1");
-    if (!h1) return "";
-
-    const titleSpan = Array.from(h1.children).find((child) => {
-      return child.tagName === "SPAN" && !child.classList.contains("limit");
-    });
-
-    return titleSpan ? titleSpan.innerText.trim() : "";
+  /**
+   * 루트 노드 하위에서 "정답이에요!"를 포함하는
+   * 가장 구체적인 요소(=텍스트 노드의 부모)를 찾습니다.
+   * 이모지를 깔끔하게 append할 타겟을 정하기 위함.
+   */
+  function findAcTextElement(rootNode) {
+    const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.textContent && node.textContent.includes("정답이에요!")) {
+        return node.parentElement;
+      }
+    }
+    return null;
   }
 
-  function tierImageSelector(tier) {
-    return tier
-      ? `h1 img[src*="/solved/${tier}.svg"]`
-      : 'h1 img[src*="/solved/"]';
+  /**
+   * background.js에서 반환한 status에 따라 이모지를 표시합니다.
+   * showEmoji가 false면 아무것도 하지 않음.
+   */
+  function showResultEmoji(response, targetEl) {
+    if (!settings.showEmoji) return;
+    if (!response || !targetEl) return;
+
+    // 같은 상태가 이미 표시되어 있으면 중복 방지
+    if (targetEl.querySelector(".jungol-notify-emoji")) return;
+
+    let emoji = "";
+    let title = "";
+    switch (response.status) {
+      case "sent":
+        emoji = " ✔️";
+        title = "[정올 알리미] 디스코드에 전송했습니다.";
+        break;
+      case "error":
+        emoji = " ❌";
+        title = `[정올 알리미] 전송 실패 (${response.reason || "unknown"})`;
+        break;
+      case "duplicate":
+        emoji = " ⏭️";
+        title = "[정올 알리미] 이미 전송한 문제입니다. (첫 정답만 전송 옵션 활성)";
+        break;
+      case "inactive":
+        emoji = " 💤";
+        title = "[정올 알리미] 비활성화 상태입니다.";
+        break;
+      default:
+        return;
+    }
+
+    const span = document.createElement("span");
+    span.className = "jungol-notify-emoji";
+    span.title = title;
+    span.textContent = emoji;
+    span.style.marginLeft = "4px";
+    targetEl.appendChild(span);
   }
 
-  function getDomTierImageUrl(tier) {
-    const tierImgElem = document.querySelector(tierImageSelector(tier));
-    return tierImgElem ? tierImgElem.src : "";
-  }
-
-  function getDomTierColor(tier) {
-    const tierImgElem = document.querySelector(tierImageSelector(tier));
-    const tierElem = tierImgElem?.closest('[style*="--t"]') || document.querySelector('h1 [style*="--t"]');
-
-    return tierElem ? tierElem.style.getPropertyValue("--t").trim() : "";
-  }
-
-  function getTierFromImageUrl(url) {
-    const match = url.match(/\/solved\/(\d+)\.svg/);
-    return match ? Number(match[1]) : 0;
-  }
-
-  function getDomLanguage() {
-    const langBtn = Array.from(document.querySelectorAll('button')).find(btn => {
-      const icon = btn.querySelector('span.notranslate');
-      return icon && icon.innerText === 'language';
-    });
-
-    return langBtn ? langBtn.innerText.replace('language', '').trim() : "";
-  }
-
-  function readJungolData(json) {
-    const result = {};
-
-    function hasOwn(value, key) {
-      return Object.prototype.hasOwnProperty.call(value, key);
-    }
-
-    function isPresent(value) {
-      return value !== undefined && value !== null && value !== "";
-    }
-
-    function unwrapData(value) {
-      return value && typeof value === "object" && value.data && typeof value.data === "object"
-        ? value.data
-        : value;
-    }
-
-    function walkObjects(value, visit, seen = new WeakSet()) {
-      if (!value || typeof value !== "object" || seen.has(value)) return;
-
-      seen.add(value);
-      visit(value);
-
-      for (const child of Object.values(value)) {
-        walkObjects(child, visit, seen);
+  /**
+   * 메시지를 background로 전송하고, 응답 받으면 이모지를 표시.
+   */
+  function sendAndShow(payload, targetEl) {
+    chrome.runtime.sendMessage(payload, (response) => {
+      // 확장 프로그램 재로딩 등으로 chrome.runtime.lastError가 발생할 수 있음
+      if (chrome.runtime.lastError) {
+        console.error("[정올 알리미] sendMessage error:", chrome.runtime.lastError.message);
+        return;
       }
-    }
-
-    function firstPresent(value, keys) {
-      for (const key of keys) {
-        if (hasOwn(value, key) && isPresent(value[key])) return value[key];
-      }
-
-      return undefined;
-    }
-
-    function metricValue(value) {
-      if (Array.isArray(value)) {
-        const numbers = value.map(item => Number(item)).filter(Number.isFinite);
-        return numbers.length ? Math.max(...numbers) : undefined;
-      }
-
-      if (value && typeof value === "object") return undefined;
-      if (!isPresent(value)) return undefined;
-
-      const num = Number(value);
-      return Number.isFinite(num) ? num : value;
-    }
-
-    function readMetric(value, keys) {
-      for (const key of keys) {
-        if (!hasOwn(value, key)) continue;
-
-        const metric = metricValue(value[key]);
-        if (isPresent(metric)) return { key, value: metric };
-      }
-
-      return null;
-    }
-
-    function sourceText(source) {
-      if (typeof source === "string") return source;
-      if (Array.isArray(source)) {
-        for (const item of source) {
-          const text = sourceText(item);
-          if (text) return text;
-        }
-      }
-      if (source && typeof source === "object") {
-        return sourceText(source.source || source.code || source.text);
-      }
-
-      return "";
-    }
-
-    function sourceByteLength(value) {
-      const text = sourceText(value.source || value.code || value.text);
-      return text ? new TextEncoder().encode(text).length : 0;
-    }
-
-    function hasSubmissionSignal(value) {
-      return [
-        "sid", "submissionId", "r", "result", "m_reason", "score",
-        "m_time", "m_memory", "source",
-      ].some(key => hasOwn(value, key));
-    }
-
-    function readSubmissionData(value) {
-      const candidate = unwrapData(value);
-      if (!candidate || typeof candidate !== "object" || !hasSubmissionSignal(candidate)) return;
-
-      const executionTime = readMetric(candidate, [
-        "m_time", "dur", "duration", "runtime", "runtimeMs", "timeMs", "time",
-      ]);
-      const memoryUsage = readMetric(candidate, [
-        "m_memory", "mem", "memory", "memoryKb", "memoryKB", "memoryMb", "memoryMB", "memoryUsage",
-      ]);
-      const codeLength = readMetric(candidate, [
-        "size", "byt", "byte", "bytes", "sourceLength", "codeLength", "codeLengthBytes",
-      ]);
-      const sourceLength = codeLength ? 0 : sourceByteLength(candidate);
-
-      const sid = firstPresent(candidate, ["sid", "submissionId"])
-        || (
-          (executionTime || memoryUsage || codeLength || candidate.source)
-            ? firstPresent(candidate, ["id"])
-            : undefined
-        );
-      const language = firstPresent(candidate, ["language", "lang"]);
-
-      if (sid) result.sid = String(sid);
-      if (language) result.language = language;
-      if (executionTime) result.executionTime = executionTime.value;
-      if (memoryUsage) {
-        result.memoryUsage = memoryUsage.value;
-        result.memoryUnit = memoryUsage.key === "memory" || memoryUsage.key.toLowerCase().includes("mb")
-          ? "MB"
-          : "KB";
-      }
-      if (codeLength || sourceLength) {
-        result.codeLength = codeLength?.value || sourceLength;
-      }
-    }
-
-    for (const node of json?.nodes || []) {
-      if (!node?.data) continue;
-
-      const root = decodeDevalue(node.data);
-      if (!root || typeof root !== "object") continue;
-
-      const account = root["$/account/my"]?.data;
-      if (account) {
-        if (account.handle) result.handle = account.handle;
-        if (account.id) result.userId = account.id;
-        if (account.rank) result.userRank = account.rank;
-        if (account.tier) result.userTier = account.tier;
-      }
-
-      if (root.pid) result.pid = String(root.pid);
-
-      walkObjects(root, readSubmissionData);
-
-      const problemKey = Object.keys(root).find(k => k.startsWith("$/problem/"));
-      const problemData = problemKey ? root[problemKey]?.data : null;
-      if (!problemData) continue;
-
-      result.pid = String(problemData.id || root.pid || result.pid || "");
-      if (problemData.title) result.problemTitle = problemData.title;
-
-      const problemTier = problemData.fTier || problemData.tier?.tier;
-      if (problemTier) result.problemTier = problemTier;
-
-      if (problemData.sid) result.sid = String(problemData.sid);
-      if (problemData.rank?.solvedUsr) result.solvedUsr = problemData.rank.solvedUsr;
-      if (problemData.rank?.solvedSub) result.solvedSub = problemData.rank.solvedSub;
-      if (problemData.rank?.totalSub) result.totalSub = problemData.rank.totalSub;
-    }
-
-    return result;
-  }
-
-  function mergeData(...sources) {
-    return sources.reduce((result, source) => {
-      for (const [key, value] of Object.entries(source || {})) {
-        if (value !== undefined && value !== null && value !== "") {
-          result[key] = value;
-        }
-      }
-      return result;
-    }, {});
-  }
-
-  function fetchJson(url) {
-    return fetch(url).then(res => {
-      if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-      return res.json();
+      showResultEmoji(response, targetEl);
     });
   }
 
-  function fetchText(url) {
-    return fetch(url, { credentials: "include" }).then(res => {
-      if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-      return res.text();
-    });
-  }
+  // 채점 결과 판정 라벨 (2026-10 정올 개편 이후: "정답이에요!" 문구 → 결과 오버레이의 .verdict-label "정답")
+  const AC_LABELS = ["정답", "Accepted"];
+  const text = (sel) => document.querySelector(sel)?.textContent.trim() || "";
 
-  function readSubmissionHtml(html, sid) {
-    const result = {};
-    const escapedSid = sid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const submissionBlockMatch = html.match(new RegExp(`"\\$/submission/${escapedSid}"[\\s\\S]*?url:"/submission/${escapedSid}"`));
-    const source = submissionBlockMatch ? submissionBlockMatch[0] : html;
-
-    function readNumber(key) {
-      const match = source.match(new RegExp(`${key}:([0-9]+(?:\\.[0-9]+)?)`));
-      return match ? Number(match[1]) : "";
+  function findNewAcLabel() {
+    for (const el of document.querySelectorAll(".verdict-label")) {
+      if (el.dataset.jungolNotify) continue;
+      if (AC_LABELS.includes(el.textContent.trim())) return el;
     }
-
-    function readString(key) {
-      const match = source.match(new RegExp(`${key}:"([^"]*)"`));
-      return match ? match[1] : "";
-    }
-
-    result.sid = sid;
-    result.executionTime = readNumber("m_time");
-    result.memoryUsage = readNumber("m_memory");
-    result.memoryUnit = "KB";
-    result.codeLength = readNumber("size");
-    result.language = readString("language");
-    result.pid = String(readNumber("problemId") || "");
-
-    return result;
+    return null;
   }
 
-  function isExtensionContextError(err) {
-    const message = String(err?.message || err);
-
-    return message.includes("Extension context invalidated")
-      || message.includes("Could not establish connection")
-      || message.includes("Receiving end does not exist");
-  }
-
-  function safeSendMessage(message) {
-    try {
-      if (!chrome?.runtime?.id) return false;
-
-      chrome.runtime.sendMessage(message);
-
-      return true;
-    } catch (err) {
-      if (!isExtensionContextError(err)) {
-        console.error("[정올 알리미] background 메시지 전송 실패:", err);
-      }
-
-      return false;
-    }
-  }
-
-  function readDomData() {
-    const pathPid = getProblemIdFromPath();
-    const tierImgUrl = getDomTierImageUrl();
-
-    return {
-      pid: pathPid,
-      problemUrl: getProblemUrl(pathPid),
-      problemTitle: getDomProblemTitle(),
-      tierImgUrl,
-      problemTier: getTierFromImageUrl(tierImgUrl),
-      language: getDomLanguage(),
-    };
-  }
-
-  function fetchSubmissionDetail(rawSid, problemUrl) {
-    const sid = encodeURIComponent(rawSid);
-    const { origin } = window.location;
-
-    return Promise.allSettled([
-      fetchJson(`${problemUrl}/submission/__data.json?sid=${sid}`).then(readJungolData),
-      fetchJson(`${origin}/submission/${sid}/__data.json`).then(readJungolData),
-      fetchText(`${origin}/submission/${sid}`).then(html => readSubmissionHtml(html, rawSid)),
-    ]).then(results => results.map(result => (
-      result.status === "fulfilled" ? result.value : {}
-    )));
-  }
-
-  async function fetchSubmissionData(problemUrl) {
-    const results = await Promise.allSettled([
-      fetchJson(`${problemUrl}/__data.json`),
-      fetchJson(`${problemUrl}/submission/__data.json`),
-    ]);
-
-    for (const result of results) {
-      if (result.status === "rejected") {
-        console.error("[정올 알리미] __data.json 요청 실패:", result.reason);
-      }
-    }
-
-    let data = mergeData(...results.map(result => (
-      result.status === "fulfilled" ? readJungolData(result.value) : {}
-    )));
-
-    if (data.sid) {
-      data = mergeData(data, ...await fetchSubmissionDetail(data.sid, problemUrl));
-    }
-
-    return data;
-  }
-
-  function buildPayload(data, dom) {
-    const pid = data.pid || dom.pid;
-    const problemTier = data.problemTier || dom.problemTier;
-
-    return {
-      type: "CORRECT_ANSWER",
-      problemNum: pid ? `#${pid}` : "",
-      problemTitle: data.problemTitle || dom.problemTitle,
-      problemUrl: dom.problemUrl,
-      tierImgUrl: dom.tierImgUrl || buildTierImageUrl(problemTier),
-      tierColor: getDomTierColor(problemTier),
-      language: dom.language || data.language || "",
-      executionTime: data.executionTime || "",
-      memoryUsage: data.memoryUsage || "",
-      memoryUnit: data.memoryUnit || "KB",
-      codeLength: data.codeLength || "",
-      handle: data.handle || "",
-      userId: data.userId || "",
-      userRank: data.userRank || 0,
-      userTier: data.userTier || 0,
-      pid,
-      sid: data.sid || "",
-      solvedUsr: data.solvedUsr || 0,
-      solvedSub: data.solvedSub || 0,
-      totalSub: data.totalSub || 0,
-    };
-  }
-
-  async function handleCorrectAnswer() {
-    const dom = readDomData();
-
-    try {
-      const data = await fetchSubmissionData(dom.problemUrl);
-      safeSendMessage(buildPayload(data, dom));
-    } catch (err) {
-      console.error("[정올 알리미] __data.json 처리 실패:", err);
-      safeSendMessage(buildPayload({}, dom));
-    }
-  }
-
-  const observer = new MutationObserver((mutations) => {
+  const observer = new MutationObserver(() => {
     if (isContestPage()) return;
+    if (!settings.active) return; // 비활성 상태면 fetch도 생략
+
+    const targetEl = findNewAcLabel();
+    if (!targetEl) return;
+    targetEl.dataset.jungolNotify = "1"; // 같은 결과 창을 두 번 처리하지 않도록 표시
 
     const now = Date.now();
     if (now - lastSentTime < COOLDOWN_MS) return;
+    lastSentTime = now;
 
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        if (!node.innerText || !node.innerText.includes("정답이에요!")) continue;
+    const problemNum = text(".title-main .eyebrow > span").replace(/^#/, "");
+    const problemTitle = text("h1 .name");
+    const tierImgElem = document.querySelector("h1 .tier img");
+    const tierImgUrl = tierImgElem ? tierImgElem.src : "";
+    const tierColorDiv = document.querySelector("h1 .tier main");
+    const tierHexColor = tierColorDiv ? tierColorDiv.style.getPropertyValue("--t").trim() : "";
+    const language = text("button.lang-chip .lang-label");
 
-        lastSentTime = now;
-        handleCorrectAnswer();
+    const cleanUrl = window.location.origin + window.location.pathname;
+    const submissionUrl = cleanUrl + "/submission";
 
-        return;
-      }
-    }
+    const basePayload = {
+      type: "CORRECT_ANSWER",
+      problemNum, problemTitle, problemUrl: cleanUrl,
+      tierImgUrl, tierColor: tierHexColor, language,
+    };
+
+    fetch(submissionUrl + "/__data.json")
+      .then(res => res.json())
+      .then(json => {
+        let handle = "", userId = "", userRank = 0, userTier = 0;
+        let pid = "", sid = "", solvedUsr = 0, solvedSub = 0, totalSub = 0;
+
+        try {
+          const nodes = json.nodes || [];
+
+          if (nodes[0] && nodes[0].data) {
+            const root = decodeDevalue(nodes[0].data);
+            const account = root["$/account/my"]?.data;
+            if (account) {
+              handle = account.handle || "";
+              userId = account.id || "";
+              userRank = account.rank || 0;
+              userTier = account.tier || 0;
+            }
+          }
+
+          if (nodes[2] && nodes[2].data) {
+            const prob = decodeDevalue(nodes[2].data);
+            pid = prob.pid || "";
+            const probKey = Object.keys(prob).find(k => k.startsWith("$/problem/"));
+            if (probKey && prob[probKey]?.data) {
+              const probData = prob[probKey].data;
+              sid = probData.sid || "";
+              solvedUsr = probData.rank?.solvedUsr || 0;
+              solvedSub = probData.rank?.solvedSub || 0;
+              totalSub = probData.rank?.totalSub || 0;
+            }
+          }
+        } catch (e) {
+          console.error("[정올 알리미] __data.json 파싱 에러:", e);
+        }
+
+        sendAndShow({
+          ...basePayload,
+          handle, userId, userRank, userTier,
+          pid, sid, solvedUsr, solvedSub, totalSub,
+        }, targetEl);
+      })
+      .catch(err => {
+        console.error("[정올 알리미] __data.json 요청 실패:", err);
+        sendAndShow({
+          ...basePayload,
+          handle: "", userId: "", userRank: 0, userTier: 0,
+          pid: "", sid: "", solvedUsr: 0, solvedSub: 0, totalSub: 0,
+        }, targetEl);
+      });
+
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
